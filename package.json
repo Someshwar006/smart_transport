@@ -1,0 +1,12 @@
+{
+  "name": "logiconnect-monorepo",
+  "version": "1.0.0",
+  "description": "LogiConnect - Production-Ready Multi-Role Transport & Freight Logistics Platform (MERN)",
+  "scripts": {
+    "server": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "seed": "npm --prefix server run seed"
+  }
+}
+
