@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Connection = require('../models/Connection');
 const User = require('../models/User');
 const { sendNotificationEmail } = require('../config/nodemailer');
@@ -15,12 +16,21 @@ const getAcceptedConnectedIds = async (userId) => {
 
 const getConnectedUserIds = getAcceptedConnectedIds;
 
+// Phone number masking helper
+const maskPhone = (phone) => {
+  if (!phone) return 'Not Provided';
+  const clean = phone.replace(/[^0-9]/g, '');
+  if (clean.length < 4) return '+91 ••••• ••••';
+  const last4 = clean.slice(-4);
+  return `+91 ••••• ••${last4}`;
+};
+
 // @desc    Send a connection request
 // @route   POST /api/connections/request
 // @access  Private
-const requestConnection = async (req, res) => {
+const sendConnectionRequest = async (req, res) => {
   try {
-    const { recipientId } = req.body;
+    const recipientId = req.body.recipientId || req.body.recipient;
     const requesterId = req.user._id;
 
     if (!recipientId) {
@@ -48,15 +58,19 @@ const requestConnection = async (req, res) => {
       if (existing.status === 'accepted') {
         return res.status(400).json({ message: 'You are already connected with this user' });
       }
+
       if (existing.status === 'pending') {
         const isSentByMe = existing.requester.toString() === requesterId.toString();
-        return res.status(400).json({
+        return res.status(200).json({
+          success: true,
           message: isSentByMe
-            ? 'A pending connection request has already been sent to this user'
-            : 'This user has already sent you a connection request. Please accept it from Incoming Requests.',
+            ? 'A pending connection request is already in progress'
+            : 'Incoming request pending from this user',
+          connection: existing,
         });
       }
-      // If previously rejected, allow re-requesting
+
+      // If previously in another status, reset to pending
       existing.requester = requesterId;
       existing.recipient = recipientId;
       existing.status = 'pending';
@@ -122,35 +136,40 @@ const requestConnection = async (req, res) => {
   }
 };
 
-// @desc    Respond to connection request (accept or reject)
-// @route   PATCH /api/connections/:id/respond
-// @access  Private
-const respondConnection = async (req, res) => {
-  try {
-    const connectionId = req.params.id;
-    const { status } = req.body;
+const requestConnection = sendConnectionRequest;
 
-    if (!['accepted', 'rejected'].includes(status)) {
-      return res.status(400).json({ message: "Status must be either 'accepted' or 'rejected'" });
+// @desc    Respond to connection request (accept or ignore)
+// @route   PATCH /api/connections/respond/:connectionId OR PATCH /api/connections/:id/respond
+// @access  Private
+const respondConnectionRequest = async (req, res) => {
+  try {
+    const connectionId = req.params.connectionId || req.params.id;
+    const action =
+      req.body.action ||
+      (req.body.status === 'accepted' ? 'accept' : req.body.status === 'rejected' ? 'ignore' : null);
+
+    if (!['accept', 'ignore', 'reject'].includes(action)) {
+      return res.status(400).json({ message: "Action must be either 'accept' or 'ignore'" });
     }
 
     const connection = await Connection.findById(connectionId)
-      .populate('requester', 'name email role companyName')
-      .populate('recipient', 'name email role companyName');
+      .populate('requester', 'name email role companyName phone secondaryPhone headLocation ceoName vehicleNumber vehicleType wheelType permitType privacySetting')
+      .populate('recipient', 'name email role companyName phone secondaryPhone headLocation ceoName vehicleNumber vehicleType wheelType permitType privacySetting');
 
     if (!connection) {
       return res.status(404).json({ message: 'Connection request not found' });
     }
 
-    // Only the recipient can accept or reject
+    // Only the recipient can accept or ignore the request
     if (connection.recipient._id.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Only the recipient can respond to this connection request' });
     }
 
-    connection.status = status;
-    await connection.save();
+    // 1. ACCEPT LIFECYCLE
+    if (action === 'accept') {
+      connection.status = 'accepted';
+      await connection.save();
 
-    if (status === 'accepted') {
       // Send confirmation email back to requester
       sendNotificationEmail({
         to: connection.requester.email,
@@ -167,102 +186,100 @@ const respondConnection = async (req, res) => {
         `,
         text: `${req.user.name} accepted your connection request on LogiConnect.`,
       });
+
+      // Provide partner details with unmasked information
+      const partner =
+        connection.requester._id.toString() === req.user._id.toString()
+          ? connection.recipient
+          : connection.requester;
+
+      return res.status(200).json({
+        success: true,
+        message: 'Connection request accepted successfully',
+        connection,
+        partner,
+      });
     }
 
-    res.status(200).json({
+    // 2. IGNORE / ROLLBACK LIFECYCLE: Hard delete the pending record from MongoDB
+    await Connection.findByIdAndDelete(connectionId);
+
+    return res.status(200).json({
       success: true,
-      message: `Connection request ${status} successfully`,
-      connection,
+      message: 'Connection request ignored and deleted',
+      connectionId,
     });
   } catch (error) {
+    console.error('[Respond Connection Error]:', error);
     res.status(500).json({ message: error.message || 'Failed to respond to connection' });
   }
 };
+
+const respondConnection = respondConnectionRequest;
 
 // @desc    Accept connection request (Alias for /:id/accept)
 // @route   PATCH /api/connections/:id/accept
 // @access  Private
 const acceptConnection = async (req, res) => {
-  req.body.status = 'accepted';
-  return respondConnection(req, res);
+  req.body.action = 'accept';
+  return respondConnectionRequest(req, res);
 };
 
-// @desc    Reject connection request (Alias for /:id/reject)
+// @desc    Reject / Ignore connection request (Alias for /:id/reject)
 // @route   PATCH /api/connections/:id/reject
 // @access  Private
 const rejectConnection = async (req, res) => {
-  req.body.status = 'rejected';
-  return respondConnection(req, res);
+  req.body.action = 'ignore';
+  return respondConnectionRequest(req, res);
 };
 
-// @desc    Get connection status between logged-in user and a target user
-// @route   GET /api/connections/status/:targetUserId
+// @desc    Break / Delete an existing connection
+// @route   DELETE /api/connections/break/:targetUserId
 // @access  Private
-const getConnectionStatus = async (req, res) => {
+const breakConnection = async (req, res) => {
   try {
     const { targetUserId } = req.params;
     const currentUserId = req.user._id;
 
-    if (targetUserId.toString() === currentUserId.toString()) {
-      return res.status(200).json({ success: true, status: 'self' });
+    if (!targetUserId) {
+      return res.status(400).json({ message: 'Target user ID is required' });
     }
 
-    const conn = await Connection.findOne({
+    // Find and delete the mutual connection record
+    let deleted = await Connection.findOneAndDelete({
       $or: [
         { requester: currentUserId, recipient: targetUserId },
         { requester: targetUserId, recipient: currentUserId },
       ],
     });
 
-    if (!conn) {
-      return res.status(200).json({ success: true, status: 'none', connectionId: null });
+    // Fallback: If targetUserId was passed as the connection ObjectId itself
+    if (!deleted && mongoose.Types.ObjectId.isValid(targetUserId)) {
+      deleted = await Connection.findOneAndDelete({
+        _id: targetUserId,
+        $or: [{ requester: currentUserId }, { recipient: currentUserId }],
+      });
     }
 
-    let status = conn.status;
-    if (status === 'pending') {
-      status = conn.requester.toString() === currentUserId.toString()
-        ? 'pending_sent'
-        : 'pending_received';
+    if (!deleted) {
+      return res.status(404).json({ message: 'Connection record not found or already deleted' });
     }
 
     res.status(200).json({
       success: true,
-      status,
-      connectionId: conn._id,
+      message: 'Connection broken successfully. Users returned to explore pool.',
+      targetUserId,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message || 'Failed to get connection status' });
+    console.error('[Break Connection Error]:', error);
+    res.status(500).json({ message: error.message || 'Failed to break connection' });
   }
 };
 
-// @desc    Get all pending incoming connection requests for current user
-// @route   GET /api/connections/requests/incoming
-// @access  Private
-const getIncomingRequests = async (req, res) => {
-  try {
-    const currentUserId = req.user._id;
-
-    const requests = await Connection.find({
-      recipient: currentUserId,
-      status: 'pending',
-    })
-      .populate('requester', 'name email companyName phone role headLocation ceoName vehicleNumber vehicleType wheelType permitType privacySetting')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: requests.length,
-      requests,
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message || 'Failed to fetch incoming requests' });
-  }
-};
-
-// @desc    Get segregated role directory (connected, incomingRequests, explore)
+// @desc    Get segregated role directory (connected vs explore with state lifecycle)
 // @route   GET /api/connections/directory/:role
 // @access  Private
-const getRoleDirectory = async (req, res) => {
+const getTargetRoleDirectory = async (req, res) => {
   try {
     const currentUserId = req.user._id ? req.user._id.toString() : req.user.id.toString();
     const targetRole = req.params.role;
@@ -284,8 +301,7 @@ const getRoleDirectory = async (req, res) => {
       connectionMap[otherPartyId] = {
         connectionId: conn._id,
         status: conn.status,
-        isIncoming: !isRequester && conn.status === 'pending',
-        isOutgoing: isRequester && conn.status === 'pending',
+        isRequester,
       };
     });
 
@@ -293,60 +309,56 @@ const getRoleDirectory = async (req, res) => {
     const incomingRequests = [];
     const explore = [];
 
-    // Helper to mask phone for explore users with secure privacy
-    const maskPhone = (phone) => {
-      if (!phone) return 'Not Provided';
-      const clean = phone.replace(/[^0-9]/g, '');
-      if (clean.length < 4) return '+91 ••••• ••••';
-      const last4 = clean.slice(-4);
-      return `+91 ••••• ••${last4}`;
-    };
-
     users.forEach((user) => {
       const connInfo = connectionMap[user._id.toString()];
-      const isAccepted = connInfo && connInfo.status === 'accepted';
-      const isIncoming = connInfo && connInfo.isIncoming;
-      const isOutgoing = connInfo && connInfo.isOutgoing;
-      const isPublic = user.privacySetting === 'public';
 
-      if (isAccepted) {
+      if (connInfo && connInfo.status === 'accepted') {
+        // STATE 3: ACCEPTED
+        // Strictly displayed in Connected Tab ONLY (removed from Explore tab)
         connected.push({
           ...user,
           connectionId: connInfo.connectionId,
+          connectionState: 'accepted',
           connectionStatus: 'accepted',
-          isPhoneMasked: false, // connected users have full unmasked phone details!
+          isPhoneMasked: false, // Connected users view full verified details
         });
-      }
+      } else {
+        // Candidate is displayed in Explore Tab
+        let connectionState = 'idle';
+        let connectionStatus = 'none';
 
-      if (isIncoming) {
-        incomingRequests.push({
+        if (connInfo && connInfo.status === 'pending') {
+          if (connInfo.isRequester) {
+            // STATE 2A: PENDING SENDER VIEW -> "Processing..."
+            connectionState = 'processing';
+            connectionStatus = 'pending_sent';
+          } else {
+            // STATE 2B: PENDING RECEIVER VIEW -> "Accept" / "Ignore"
+            connectionState = 'received_pending';
+            connectionStatus = 'pending_received';
+
+            // Also include in incoming requests array for the top notification banner
+            incomingRequests.push({
+              ...user,
+              connectionId: connInfo.connectionId,
+              connectionState: 'received_pending',
+              connectionStatus: 'pending_received',
+              isPhoneMasked: true,
+              phone: maskPhone(user.phone),
+            });
+          }
+        }
+
+        explore.push({
           ...user,
-          connectionId: connInfo.connectionId,
-          connectionStatus: 'pending_received',
-          isPhoneMasked: user.privacySetting === 'secure',
-          phone: user.privacySetting === 'secure' ? maskPhone(user.phone) : user.phone,
+          connectionId: connInfo ? connInfo.connectionId : null,
+          connectionState,
+          connectionStatus,
+          isPhoneMasked: true, // Always masked in Explore tab
+          phone: maskPhone(user.phone),
+          secondaryPhone: user.secondaryPhone ? maskPhone(user.secondaryPhone) : undefined,
         });
       }
-
-      let exploreStatus = 'none';
-      if (isAccepted) exploreStatus = 'accepted';
-      else if (isIncoming) exploreStatus = 'pending_received';
-      else if (isOutgoing) exploreStatus = 'pending_sent';
-
-      const shouldMaskPhone = !isAccepted && !isPublic;
-
-      explore.push({
-        ...user,
-        connectionStatus: exploreStatus,
-        connectionId: connInfo ? connInfo.connectionId : null,
-        isPhoneMasked: shouldMaskPhone,
-        phone: shouldMaskPhone ? maskPhone(user.phone) : user.phone,
-        secondaryPhone: user.secondaryPhone
-          ? shouldMaskPhone
-            ? maskPhone(user.secondaryPhone)
-            : user.secondaryPhone
-          : undefined,
-      });
     });
 
     res.status(200).json({
@@ -356,7 +368,84 @@ const getRoleDirectory = async (req, res) => {
       explore,
     });
   } catch (error) {
+    console.error('[Get Role Directory Error]:', error);
     res.status(500).json({ message: 'Error fetching directory', error: error.message });
+  }
+};
+
+const getRoleDirectory = getTargetRoleDirectory;
+
+// @desc    Get connection status between logged-in user and a target user
+// @route   GET /api/connections/status/:targetUserId
+// @access  Private
+const getConnectionStatus = async (req, res) => {
+  try {
+    const { targetUserId } = req.params;
+    const currentUserId = req.user._id;
+
+    if (targetUserId.toString() === currentUserId.toString()) {
+      return res.status(200).json({ success: true, status: 'self', connectionState: 'self' });
+    }
+
+    const conn = await Connection.findOne({
+      $or: [
+        { requester: currentUserId, recipient: targetUserId },
+        { requester: targetUserId, recipient: currentUserId },
+      ],
+    });
+
+    if (!conn) {
+      return res.status(200).json({
+        success: true,
+        status: 'none',
+        connectionState: 'idle',
+        connectionId: null,
+      });
+    }
+
+    let status = conn.status;
+    let connectionState = 'idle';
+
+    if (status === 'accepted') {
+      connectionState = 'accepted';
+    } else if (status === 'pending') {
+      const isSender = conn.requester.toString() === currentUserId.toString();
+      status = isSender ? 'pending_sent' : 'pending_received';
+      connectionState = isSender ? 'processing' : 'received_pending';
+    }
+
+    res.status(200).json({
+      success: true,
+      status,
+      connectionState,
+      connectionId: conn._id,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || 'Failed to get connection status' });
+  }
+};
+
+// @desc    Get all pending incoming connection requests for current user
+// @route   GET /api/connections/requests/incoming
+// @access  Private
+const getIncomingRequests = async (req, res) => {
+  try {
+    const currentUserId = req.user._id;
+
+    const requests = await Connection.find({
+      recipient: currentUserId,
+      status: 'pending',
+    })
+      .populate('requester', 'name email companyName phone secondaryPhone role headLocation ceoName vehicleNumber vehicleType wheelType permitType privacySetting')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: requests.length,
+      requests,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || 'Failed to fetch incoming requests' });
   }
 };
 
@@ -370,8 +459,8 @@ const getMyConnections = async (req, res) => {
     const connections = await Connection.find({
       $or: [{ requester: userId }, { recipient: userId }],
     })
-      .populate('requester', 'name email role phone privacySetting companyName headLocation vehicleNumber vehicleType wheelType permitType')
-      .populate('recipient', 'name email role phone privacySetting companyName headLocation vehicleNumber vehicleType wheelType permitType')
+      .populate('requester', 'name email role phone secondaryPhone privacySetting companyName headLocation vehicleNumber vehicleType wheelType permitType')
+      .populate('recipient', 'name email role phone secondaryPhone privacySetting companyName headLocation vehicleNumber vehicleType wheelType permitType')
       .sort({ updatedAt: -1 });
 
     const accepted = [];
@@ -416,11 +505,15 @@ const getMyConnections = async (req, res) => {
 module.exports = {
   getAcceptedConnectedIds,
   getConnectedUserIds,
-  getRoleDirectory,
+  sendConnectionRequest,
   requestConnection,
+  respondConnectionRequest,
   respondConnection,
   acceptConnection,
   rejectConnection,
+  breakConnection,
+  getTargetRoleDirectory,
+  getRoleDirectory,
   getConnectionStatus,
   getIncomingRequests,
   getMyConnections,

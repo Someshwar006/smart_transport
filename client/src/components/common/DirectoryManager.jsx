@@ -18,6 +18,9 @@ import {
   Filter,
   RotateCw,
   Sparkles,
+  Loader2,
+  ArrowRight,
+  UserX,
 } from 'lucide-react';
 
 const DirectoryManager = ({
@@ -30,24 +33,24 @@ const DirectoryManager = ({
 }) => {
   const { showSuccess, showError } = useNotification();
 
-  // Tab State: 'connected' (Default Active View) | 'explore'
+  // Primary Tab State: 'connected' (Default Active View) | 'explore'
   const [activeTab, setActiveTab] = useState('connected');
 
-  // Directory Data
+  // Segregated Directory State
   const [connected, setConnected] = useState([]);
   const [incomingRequests, setIncomingRequests] = useState([]);
   const [explore, setExplore] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Search & Filters
+  // Search & Filter State
   const [search, setSearch] = useState('');
   const [vehicleTypeFilter, setVehicleTypeFilter] = useState('');
   const [wheelTypeFilter, setWheelTypeFilter] = useState('');
 
-  // Action Loading Tracker
+  // Tracks active loading ID for user or connection in-flight
   const [actionLoadingId, setActionLoadingId] = useState(null);
 
-  // Fetch segregated directory in one atomic API call
+  // Fetch segregated directory from atomic endpoint
   const fetchDirectory = async () => {
     try {
       setLoading(true);
@@ -69,19 +72,42 @@ const DirectoryManager = ({
     fetchDirectory();
   }, [targetRole]);
 
-  // Handle Send Connection Request (Explore tab)
+  // Helper to mask phone numbers locally
+  const maskPhone = (phone) => {
+    if (!phone) return 'Not Provided';
+    const clean = phone.replace(/[^0-9]/g, '');
+    if (clean.length < 4) return '+91 ••••• ••••';
+    const last4 = clean.slice(-4);
+    return `+91 ••••• ••${last4}`;
+  };
+
+  // 1. STATE 1 -> STATE 2: SEND CONNECTION REQUEST ("idle" -> "processing")
   const handleSendRequest = async (targetUserId, targetUserName) => {
     try {
       setActionLoadingId(targetUserId);
+
+      // Optimistic update: card immediately flips to "processing" in Explore tab
+      setExplore((prev) =>
+        prev.map((item) =>
+          item._id.toString() === targetUserId.toString()
+            ? { ...item, connectionState: 'processing', connectionStatus: 'pending_sent' }
+            : item
+        )
+      );
+
       const res = await axiosClient.post('/connections/request', { recipientId: targetUserId });
       if (res.data?.success) {
         showSuccess(`Connection request dispatched to ${targetUserName || roleDisplayName}!`);
         const newConnId = res.data.connection?._id;
-        // Real-time optimistic update in explore array
         setExplore((prev) =>
           prev.map((item) =>
             item._id.toString() === targetUserId.toString()
-              ? { ...item, connectionStatus: 'pending_sent', connectionId: newConnId }
+              ? {
+                  ...item,
+                  connectionState: 'processing',
+                  connectionStatus: 'pending_sent',
+                  connectionId: newConnId || item.connectionId,
+                }
               : item
           )
         );
@@ -89,62 +115,77 @@ const DirectoryManager = ({
     } catch (err) {
       console.error('[Send Request Error]:', err);
       showError(err.response?.data?.message || 'Failed to dispatch connection request');
+      // Rollback optimistic state if failed
+      setExplore((prev) =>
+        prev.map((item) =>
+          item._id.toString() === targetUserId.toString()
+            ? { ...item, connectionState: 'idle', connectionStatus: 'none' }
+            : item
+        )
+      );
     } finally {
       setActionLoadingId(null);
     }
   };
 
-  // Handle Respond to Incoming Request (Accept / Decline)
-  const handleRespond = async (connectionId, status, userItem) => {
+  // 2. STATE 2 -> STATE 3 OR ROLLBACK: RESPOND TO REQUEST ("accept" OR "ignore")
+  const handleRespond = async (connectionId, action, userItem) => {
     try {
       setActionLoadingId(connectionId || userItem._id);
-      const res = await axiosClient.patch(`/connections/${connectionId}/respond`, { status });
-      if (res.data?.success) {
-        if (status === 'accepted') {
-          showSuccess(`Connection accepted with ${userItem.name}! Contact details and freight unlocked.`);
+      const res = await axiosClient.patch(`/connections/respond/${connectionId}`, { action });
 
-          // 1. Remove from incoming requests
+      if (res.data?.success) {
+        if (action === 'accept') {
+          showSuccess(`Connection accepted with ${userItem.name}! Added to Connected tab.`);
+
+          // Remove from incoming requests banner
           setIncomingRequests((prev) =>
             prev.filter(
               (req) => req.connectionId !== connectionId && req._id.toString() !== userItem._id.toString()
             )
           );
 
-          // 2. Add to Connected list in real-time (unmasked phone)
-          const acceptedUser = {
+          // Remove card completely from Explore tab
+          setExplore((prev) =>
+            prev.filter((item) => item._id.toString() !== userItem._id.toString())
+          );
+
+          // Add card into Connected tab with verified unmasked details
+          const partnerData = res.data.partner || {};
+          const acceptedCard = {
             ...userItem,
+            ...partnerData,
             connectionId,
+            connectionState: 'accepted',
             connectionStatus: 'accepted',
             isPhoneMasked: false,
           };
+
           setConnected((prev) => [
-            acceptedUser,
+            acceptedCard,
             ...prev.filter((u) => u._id.toString() !== userItem._id.toString()),
           ]);
-
-          // 3. Update Explore list to 'accepted'
-          setExplore((prev) =>
-            prev.map((item) =>
-              item._id.toString() === userItem._id.toString()
-                ? { ...item, connectionStatus: 'accepted', isPhoneMasked: false }
-                : item
-            )
-          );
         } else {
-          showSuccess(`Connection request declined.`);
+          // ACTION: "ignore" -> Rollback to idle
+          showSuccess(`Connection request ignored.`);
 
-          // Remove from incoming requests
+          // Remove from incoming requests banner
           setIncomingRequests((prev) =>
             prev.filter(
               (req) => req.connectionId !== connectionId && req._id.toString() !== userItem._id.toString()
             )
           );
 
-          // Reset status in explore
+          // Rollback candidate in Explore tab to "idle" (with Request button)
           setExplore((prev) =>
             prev.map((item) =>
               item._id.toString() === userItem._id.toString()
-                ? { ...item, connectionStatus: 'none', connectionId: null }
+                ? {
+                    ...item,
+                    connectionState: 'idle',
+                    connectionStatus: 'none',
+                    connectionId: null,
+                  }
                 : item
             )
           );
@@ -152,7 +193,55 @@ const DirectoryManager = ({
       }
     } catch (err) {
       console.error('[Respond Error]:', err);
-      showError(err.response?.data?.message || 'Failed to respond to connection request');
+      showError(err.response?.data?.message || 'Failed to update connection request');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // 3. STATE 3 -> STATE 1: BREAK MUTUAL CONNECTION
+  const handleBreakConnection = async (targetUserId, connectionId, targetUserName) => {
+    try {
+      setActionLoadingId(targetUserId);
+      const res = await axiosClient.delete(`/connections/break/${targetUserId}`);
+
+      if (res.data?.success) {
+        showSuccess(`Connection with ${targetUserName || roleDisplayName} broken. Returned to Explore.`);
+
+        // Find candidate in connected list
+        const disconnectedUser = connected.find(
+          (u) => u._id.toString() === targetUserId.toString()
+        );
+
+        // Remove from Connected tab immediately
+        setConnected((prev) => prev.filter((u) => u._id.toString() !== targetUserId.toString()));
+
+        // Add back to Explore tab with "idle" state
+        if (disconnectedUser) {
+          const isPublic = disconnectedUser.privacySetting === 'public';
+          const restoredExploreCard = {
+            ...disconnectedUser,
+            connectionState: 'idle',
+            connectionStatus: 'none',
+            connectionId: null,
+            isPhoneMasked: !isPublic,
+            phone: !isPublic ? maskPhone(disconnectedUser.phone) : disconnectedUser.phone,
+          };
+
+          setExplore((prev) => {
+            const alreadyInExplore = prev.some((u) => u._id.toString() === targetUserId.toString());
+            if (alreadyInExplore) {
+              return prev.map((u) =>
+                u._id.toString() === targetUserId.toString() ? restoredExploreCard : u
+              );
+            }
+            return [restoredExploreCard, ...prev];
+          });
+        }
+      }
+    } catch (err) {
+      console.error('[Break Connection Error]:', err);
+      showError(err.response?.data?.message || 'Failed to break connection');
     } finally {
       setActionLoadingId(null);
     }
@@ -204,17 +293,128 @@ const DirectoryManager = ({
     wheelTypeFilter,
   ]);
 
+  // Render Action Button Area on Card
+  const renderCardActions = (user, isConnectedTab = false) => {
+    const state = user.connectionState || (user.connectionStatus === 'accepted' ? 'accepted' : 'idle');
+    const isActing = Boolean(
+      actionLoadingId &&
+        (String(actionLoadingId) === String(user._id) ||
+          (user.connectionId && String(actionLoadingId) === String(user.connectionId)))
+    );
+
+    // View in Connected Tab: Show "Connected" badge and "Break Connection" option
+    if (isConnectedTab || state === 'accepted') {
+      return (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded-lg border border-emerald-200 shadow-sm">
+            <Check className="w-3.5 h-3.5 text-emerald-600" /> Connected
+          </span>
+          <button
+            onClick={() =>
+              handleBreakConnection(user._id, user.connectionId, user.companyName || user.name)
+            }
+            disabled={isActing}
+            className="text-red-600 border border-red-200 hover:bg-red-50 px-3 py-1.5 rounded-lg text-xs font-semibold transition disabled:opacity-50 inline-flex items-center gap-1"
+          >
+            {isActing ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>Breaking...</span>
+              </>
+            ) : (
+              <>
+                <UserX className="w-3 h-3" />
+                <span>Break Connection</span>
+              </>
+            )}
+          </button>
+        </div>
+      );
+    }
+
+    // View in Explore Tab: State 2A - Sender View: "Processing..." (remains until receiver accepts)
+    if (state === 'processing') {
+      return (
+        <button
+          disabled
+          className="bg-amber-50 text-amber-800 border border-amber-300 px-3.5 py-1.5 rounded-lg text-xs font-semibold cursor-not-allowed opacity-90 inline-flex items-center gap-1.5 shadow-sm"
+          title="Connection request sent. Awaiting receiver confirmation."
+        >
+          <Clock className="w-3.5 h-3.5 text-amber-700 animate-pulse" />
+          <span>Processing...</span>
+        </button>
+      );
+    }
+
+    // View in Explore Tab: State 2B - Receiver View: "Accept" and "Ignore"
+    if (state === 'received_pending') {
+      return (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handleRespond(user.connectionId, 'ignore', user)}
+            disabled={isActing}
+            className="bg-slate-200 text-slate-700 hover:bg-slate-300 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition disabled:opacity-50"
+          >
+            Ignore
+          </button>
+          <button
+            onClick={() => handleRespond(user.connectionId, 'accept', user)}
+            disabled={isActing}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold shadow-sm transition active:scale-95 disabled:opacity-50 disabled:cursor-wait inline-flex items-center gap-1.5"
+          >
+            {isActing ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Accepting...</span>
+              </>
+            ) : (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>Accept</span>
+              </>
+            )}
+          </button>
+        </div>
+      );
+    }
+
+    // View in Explore Tab: State 1 - Idle Unconnected: "Connect"
+    return (
+      <button
+        onClick={() => handleSendRequest(user._id, user.companyName || user.name)}
+        disabled={isActing}
+        className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50 disabled:cursor-wait"
+      >
+        {isActing ? (
+          <>
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span>Connecting...</span>
+          </>
+        ) : (
+          <>
+            <UserPlus className="w-3.5 h-3.5" />
+            <span>Connect</span>
+          </>
+        )}
+      </button>
+    );
+  };
+
   // Render Business / Enterprise Card (Load Owner or Transporter)
   const renderBusinessCard = (user, isConnectedTab = false) => {
-    const connStatus = user.connectionStatus || 'none';
-    const isActing = actionLoadingId === user._id || actionLoadingId === user.connectionId;
+    const isReceiverPending = user.connectionState === 'received_pending' && !isConnectedTab;
 
     return (
       <div
         key={user._id}
-        className="bg-white rounded-2xl border border-slate-200/90 shadow-sm card-hover p-5 flex flex-col justify-between space-y-4 animate-fadeIn"
+        className={`bg-white rounded-2xl border p-5 flex flex-col justify-between space-y-4 card-hover animate-fadeIn transition-all ${
+          isReceiverPending
+            ? 'border-indigo-300 ring-2 ring-indigo-50 shadow-md'
+            : 'border-slate-200/90 shadow-sm'
+        }`}
       >
         <div>
+          {/* Header */}
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-start gap-3">
               <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100 font-bold">
@@ -240,9 +440,22 @@ const DirectoryManager = ({
             </span>
           </div>
 
+          {/* Incoming Request Ribbon on Explore card */}
+          {isReceiverPending && (
+            <div className="mt-3 text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200/80 flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3 text-indigo-600" />
+                <span>Sent you a connection request</span>
+              </span>
+              <span className="text-[10px] text-indigo-600 uppercase font-bold tracking-wider">
+                Awaiting Decision
+              </span>
+            </div>
+          )}
+
           {user.headLocation && (
             <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-3 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-100">
-              <MapPin className="w-3.5 h-3.5 text-slate-400" />
+              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <span>
                 Hub: <strong>{user.headLocation}</strong>
               </span>
@@ -256,19 +469,21 @@ const DirectoryManager = ({
           )}
         </div>
 
-        {/* Card Footer: Phone + Dynamic Action */}
-        <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+        {/* Card Footer: Contact Privacy + State Actions */}
+        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-1.5 text-xs font-mono">
-            <Phone className="w-3.5 h-3.5 text-slate-400" />
+            <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <span
               className={
-                user.isPhoneMasked ? 'text-slate-400 font-semibold' : 'text-slate-800 font-bold'
+                isConnectedTab ? 'text-slate-800 font-bold' : 'text-slate-400 font-semibold'
               }
             >
-              {user.phone || 'Not Provided'}
+              {isConnectedTab
+                ? user.phone || 'Not Provided'
+                : maskPhone(user.phone)}
             </span>
-            {user.isPhoneMasked ? (
-              <span title="Connect to unmask direct number" className="cursor-help">
+            {!isConnectedTab ? (
+              <span title="Connect to unmask direct phone number" className="cursor-help">
                 <Lock className="w-3 h-3 text-amber-500" />
               </span>
             ) : (
@@ -283,38 +498,7 @@ const DirectoryManager = ({
             )}
           </div>
 
-          <div>
-            {isConnectedTab || connStatus === 'accepted' ? (
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
-                <Check className="w-3.5 h-3.5" /> Connected
-              </span>
-            ) : connStatus === 'pending_sent' ? (
-              <button
-                disabled
-                className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-3 py-1.5 rounded-lg border border-amber-200 cursor-not-allowed"
-              >
-                <Clock className="w-3.5 h-3.5" /> Request Sent
-              </button>
-            ) : connStatus === 'pending_received' ? (
-              <button
-                onClick={() => handleRespond(user.connectionId, 'accepted', user)}
-                disabled={isActing}
-                className="inline-flex items-center gap-1 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>{isActing ? 'Accepting...' : 'Accept Request'}</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => handleSendRequest(user._id, user.companyName || user.name)}
-                disabled={isActing}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>{isActing ? 'Sending...' : 'Connect'}</span>
-              </button>
-            )}
-          </div>
+          <div>{renderCardActions(user, isConnectedTab)}</div>
         </div>
       </div>
     );
@@ -322,13 +506,16 @@ const DirectoryManager = ({
 
   // Render Driver Card (Individual Fleet Operator)
   const renderDriverCard = (user, isConnectedTab = false) => {
-    const connStatus = user.connectionStatus || 'none';
-    const isActing = actionLoadingId === user._id || actionLoadingId === user.connectionId;
+    const isReceiverPending = user.connectionState === 'received_pending' && !isConnectedTab;
 
     return (
       <div
         key={user._id}
-        className="bg-white rounded-2xl border border-slate-200/90 shadow-sm card-hover p-5 flex flex-col justify-between space-y-4 animate-fadeIn"
+        className={`bg-white rounded-2xl border p-5 flex flex-col justify-between space-y-4 card-hover animate-fadeIn transition-all ${
+          isReceiverPending
+            ? 'border-indigo-300 ring-2 ring-indigo-50 shadow-md'
+            : 'border-slate-200/90 shadow-sm'
+        }`}
       >
         <div>
           {/* Header */}
@@ -353,6 +540,19 @@ const DirectoryManager = ({
               </div>
             </div>
           </div>
+
+          {/* Incoming Request Ribbon on Explore card */}
+          {isReceiverPending && (
+            <div className="mt-3 text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200/80 flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3 text-indigo-600" />
+                <span>Driver requested connection</span>
+              </span>
+              <span className="text-[10px] text-indigo-600 uppercase font-bold tracking-wider">
+                Awaiting Decision
+              </span>
+            </div>
+          )}
 
           {/* Vehicle Specs Grid */}
           <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100 mt-3">
@@ -392,7 +592,7 @@ const DirectoryManager = ({
 
           {user.headLocation && (
             <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-2.5 bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-100">
-              <MapPin className="w-3.5 h-3.5 text-slate-400" />
+              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <span>
                 Base: <strong>{user.headLocation}</strong>
               </span>
@@ -406,19 +606,21 @@ const DirectoryManager = ({
           )}
         </div>
 
-        {/* Card Footer: Phone + Dynamic Action */}
-        <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+        {/* Card Footer: Phone + Dynamic State Action */}
+        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-1.5 text-xs font-mono">
-            <Phone className="w-3.5 h-3.5 text-slate-400" />
+            <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <span
               className={
-                user.isPhoneMasked ? 'text-slate-400 font-semibold' : 'text-slate-800 font-bold'
+                isConnectedTab ? 'text-slate-800 font-bold' : 'text-slate-400 font-semibold'
               }
             >
-              {user.phone || 'Not Provided'}
+              {isConnectedTab
+                ? user.phone || 'Not Provided'
+                : maskPhone(user.phone)}
             </span>
-            {user.isPhoneMasked ? (
-              <span title="Connect to unmask direct number" className="cursor-help">
+            {!isConnectedTab ? (
+              <span title="Connect to unmask direct phone number" className="cursor-help">
                 <Lock className="w-3 h-3 text-amber-500" />
               </span>
             ) : (
@@ -433,38 +635,7 @@ const DirectoryManager = ({
             )}
           </div>
 
-          <div>
-            {isConnectedTab || connStatus === 'accepted' ? (
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
-                <Check className="w-3.5 h-3.5" /> Connected
-              </span>
-            ) : connStatus === 'pending_sent' ? (
-              <button
-                disabled
-                className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-200 cursor-not-allowed"
-              >
-                <Clock className="w-3.5 h-3.5" /> Request Sent
-              </button>
-            ) : connStatus === 'pending_received' ? (
-              <button
-                onClick={() => handleRespond(user.connectionId, 'accepted', user)}
-                disabled={isActing}
-                className="inline-flex items-center gap-1 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>{isActing ? 'Accepting...' : 'Accept Request'}</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => handleSendRequest(user._id, user.name)}
-                disabled={isActing}
-                className="inline-flex items-center gap-1 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-3.5 py-1.5 rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>{isActing ? 'Connecting...' : 'Connect'}</span>
-              </button>
-            )}
-          </div>
+          <div>{renderCardActions(user, isConnectedTab)}</div>
         </div>
       </div>
     );
@@ -479,7 +650,7 @@ const DirectoryManager = ({
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
       {/* Top Banner Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900">{pageTitle}</h1>
@@ -502,13 +673,13 @@ const DirectoryManager = ({
         </button>
       </div>
 
-      {/* Top Tabs Switcher: Tab 1 "Connected" (Default) vs Tab 2 "Explore" */}
-      <div className="flex items-center p-1.5 bg-slate-100 rounded-2xl max-w-md">
+      {/* Top Segment Switcher: Segment 1 "Connected" vs Segment 2 "Explore" */}
+      <div className="flex items-center p-1.5 bg-slate-100 rounded-2xl w-full sm:max-w-md">
         <button
           onClick={() => setActiveTab('connected')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all ${
             activeTab === 'connected'
-              ? 'bg-white text-blue-700 shadow-sm'
+              ? 'bg-white text-blue-700 shadow-sm scale-[1.01]'
               : 'text-slate-600 hover:text-slate-900'
           }`}
         >
@@ -518,21 +689,26 @@ const DirectoryManager = ({
 
         <button
           onClick={() => setActiveTab('explore')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all ${
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all relative ${
             activeTab === 'explore'
-              ? 'bg-white text-blue-700 shadow-sm'
+              ? 'bg-white text-blue-700 shadow-sm scale-[1.01]'
               : 'text-slate-600 hover:text-slate-900'
           }`}
         >
           <Search className="w-4 h-4" />
           <span>Explore ({explore.length})</span>
+          {incomingRequests.length > 0 && (
+            <span className="ml-1 text-[10px] bg-amber-500 text-white font-bold px-1.5 py-0.2 rounded-full shadow-sm animate-pulse">
+              {incomingRequests.length} pending
+            </span>
+          )}
         </button>
       </div>
 
       {/* Notification Banner: Pending Requests ({count}) - Visible ONLY if incoming requests exist */}
       {incomingRequests.length > 0 && (
         <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-slate-50 border border-blue-200 rounded-2xl p-5 shadow-sm space-y-4 animate-slideDown">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-sm">
                 <Users className="w-4 h-4" />
@@ -542,20 +718,23 @@ const DirectoryManager = ({
                   Pending Connection Requests ({incomingRequests.length})
                 </h3>
                 <p className="text-xs text-slate-500">
-                  These verified logistics members have requested to connect with you.
+                  Accept or ignore partnership requests below or directly on their Explore cards.
                 </p>
               </div>
             </div>
 
-            <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+            <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1 self-start sm:self-auto">
               <Clock className="w-3 h-3" /> Action Required
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {incomingRequests.map((reqUser) => {
-              const isResponding =
-                actionLoadingId === reqUser.connectionId || actionLoadingId === reqUser._id;
+              const isResponding = Boolean(
+                actionLoadingId &&
+                  (String(actionLoadingId) === String(reqUser.connectionId) ||
+                    String(actionLoadingId) === String(reqUser._id))
+              );
 
               return (
                 <div
@@ -589,22 +768,31 @@ const DirectoryManager = ({
                     </div>
                   </div>
 
-                  {/* Immediate Action Triggers: Accept & Decline */}
+                  {/* Immediate Action Triggers: Primary "Accept" and Secondary "Ignore" */}
                   <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                     <button
-                      onClick={() => handleRespond(reqUser.connectionId, 'rejected', reqUser)}
+                      onClick={() => handleRespond(reqUser.connectionId, 'ignore', reqUser)}
                       disabled={isResponding}
-                      className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-200 hover:bg-slate-300 rounded-lg transition disabled:opacity-50"
+                      className="bg-slate-200 text-slate-700 hover:bg-slate-300 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition disabled:opacity-50"
                     >
-                      Decline
+                      Ignore
                     </button>
                     <button
-                      onClick={() => handleRespond(reqUser.connectionId, 'accepted', reqUser)}
+                      onClick={() => handleRespond(reqUser.connectionId, 'accept', reqUser)}
                       disabled={isResponding}
-                      className="flex items-center gap-1 px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50 disabled:cursor-wait"
                     >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>{isResponding ? 'Updating...' : 'Accept'}</span>
+                      {isResponding ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Processing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Accept</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -633,7 +821,7 @@ const DirectoryManager = ({
 
         {/* Optional Driver Filters */}
         {targetRole === 'driver' && (
-          <div className="flex items-center gap-2 text-xs flex-wrap">
+          <div className="flex items-center gap-2 text-xs flex-wrap w-full sm:w-auto">
             <span className="font-semibold text-slate-600 flex items-center gap-1">
               <Filter className="w-3.5 h-3.5 text-blue-600" />
               Filter:
@@ -677,10 +865,10 @@ const DirectoryManager = ({
           </p>
         </div>
       ) : activeTab === 'connected' ? (
-        /* TAB 1: CONNECTED VIEW */
+        /* SEGMENT 1: CONNECTED VIEW */
         connected.length === 0 ? (
           /* Empty State Fallback */
-          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center space-y-4 max-w-md mx-auto shadow-sm">
+          <div className="bg-white rounded-2xl border border-slate-200 p-10 sm:p-12 text-center space-y-4 max-w-md mx-auto shadow-sm">
             <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
               <HeaderIcon className="w-6 h-6" />
             </div>
@@ -699,6 +887,7 @@ const DirectoryManager = ({
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition shadow-sm active:scale-95"
               >
                 <span>Explore {roleDisplayName}s</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -709,14 +898,14 @@ const DirectoryManager = ({
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
             {filteredConnected.map((user) => renderCard(user, true))}
           </div>
         )
       ) : (
-        /* TAB 2: EXPLORE VIEW */
+        /* SEGMENT 2: EXPLORE VIEW */
         explore.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center space-y-3 max-w-md mx-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 p-10 sm:p-12 text-center space-y-3 max-w-md mx-auto">
             <HeaderIcon className="w-10 h-10 text-slate-300 mx-auto" />
             <h3 className="text-base font-bold text-slate-800">No {roleDisplayName}s Found</h3>
             <p className="text-xs text-slate-500">
@@ -730,7 +919,7 @@ const DirectoryManager = ({
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
             {filteredExplore.map((user) => renderCard(user, false))}
           </div>
         )
@@ -740,4 +929,3 @@ const DirectoryManager = ({
 };
 
 export default DirectoryManager;
-

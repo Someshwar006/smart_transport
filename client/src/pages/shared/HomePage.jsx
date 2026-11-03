@@ -28,151 +28,84 @@ const HomePage = ({ onOpenPostLoad }) => {
         <div className="absolute top-0 right-1/4 w-96 h-96 bg-blue-600/20 rounded-full blur-3xl pointer-events-none"></div>
         <div className="absolute bottom-0 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none"></div>
 
-        <div className="max-w-7xl mx-auto relative z-10">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
-            {/* Left Column: Headlines */}
-            <div className="lg:col-span-7 space-y-6 text-center lg:text-left">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-400/20 text-blue-400 text-xs font-semibold">
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span>Next-Generation Indian Tripartite Freight Ecosystem</span>
-              </div>
+        <div className="max-w-4xl mx-auto relative z-10 text-center space-y-7 animate-fadeIn">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-500/10 border border-blue-400/20 text-blue-400 text-xs font-semibold">
+            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <span>Next-Generation Indian Tripartite Freight Ecosystem</span>
+          </div>
 
-              <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.15]">
-                Intelligent Logistics for <br />
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-sky-300 to-emerald-400">
-                  Cargo Owners, Fleets & Drivers
-                </span>
-              </h1>
+          <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.15]">
+            Intelligent Logistics for <br />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-sky-300 to-emerald-400">
+              Cargo Owners, Fleets & Drivers
+            </span>
+          </h1>
 
-              <p className="text-sm sm:text-base text-slate-300 max-w-2xl leading-relaxed mx-auto lg:mx-0">
-                Eliminate freight broker inefficiencies and dead-mileage. LogiConnect empowers
-                Indian industrial shippers to post live cargo, lets fleet transporters contract
-                verified routes, and assigns licensed lorry drivers seamlessly with transparent pricing.
-              </p>
+          <p className="text-sm sm:text-base text-slate-300 max-w-2xl leading-relaxed mx-auto">
+            Eliminate freight broker inefficiencies and dead-mileage. LogiConnect empowers
+            Indian industrial shippers to post live cargo, lets fleet transporters contract
+            verified routes, and assigns licensed lorry drivers seamlessly with transparent pricing.
+          </p>
 
-              {/* Action Buttons */}
-              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 pt-2">
-                {isAuthenticated ? (
-                  <>
-                    {user.role === 'load_owner' && (
-                      <button
-                        onClick={onOpenPostLoad}
-                        className="flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/30 transition transform active:scale-95"
-                      >
-                        <Package className="w-4 h-4" />
-                        Post a Freight Load
-                      </button>
-                    )}
-                    <Link
-                      to={
-                        user.role === 'load_owner'
-                          ? '/owner/loads'
-                          : user.role === 'transporter'
-                          ? '/transporter/loads'
-                          : '/driver/available-loads'
-                      }
-                      className="flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition"
-                    >
-                      Go to Your Dashboard
-                      <ArrowRight className="w-4 h-4" />
-                    </Link>
-                  </>
-                ) : (
-                  <>
-                    <Link
-                      to="/register"
-                      className="flex items-center gap-2 px-7 py-3.5 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-500 shadow-xl shadow-blue-600/30 transition transform active:scale-95"
-                    >
-                      <span>Join Network (Free)</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </Link>
-                    <Link
-                      to="/login"
-                      className="flex items-center gap-2 px-6 py-3.5 rounded-xl text-sm font-bold text-slate-200 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 transition"
-                    >
-                      Operations Login
-                    </Link>
-                  </>
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
+            {isAuthenticated ? (
+              <>
+                {user.role === 'load_owner' && (
+                  <button
+                    onClick={onOpenPostLoad}
+                    className="flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/30 transition transform active:scale-95"
+                  >
+                    <Package className="w-4 h-4" />
+                    Post a Freight Load
+                  </button>
                 )}
-              </div>
+                <Link
+                  to={
+                    user.role === 'load_owner'
+                      ? '/owner/loads'
+                      : user.role === 'transporter'
+                      ? '/transporter/loads'
+                      : '/driver/available-loads'
+                  }
+                  className="flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition"
+                >
+                  Go to Your Dashboard
+                  <ArrowRight className="w-4 h-4" />
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link
+                  to="/register"
+                  className="flex items-center gap-2 px-7 py-3.5 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-500 shadow-xl shadow-blue-600/30 transition transform active:scale-95"
+                >
+                  <span>Join Network (Free)</span>
+                  <ArrowRight className="w-4 h-4" />
+                </Link>
+                <Link
+                  to="/login"
+                  className="flex items-center gap-2 px-6 py-3.5 rounded-xl text-sm font-bold text-slate-200 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 transition"
+                >
+                  Operations Login
+                </Link>
+              </>
+            )}
+          </div>
 
-              {/* Small Badges */}
-              <div className="pt-4 flex flex-wrap items-center justify-center lg:justify-start gap-6 text-xs text-slate-400">
-                <div className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>GST & e-Way Compliant</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Verified VAHAN Registrations</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>All-India Corridor Permits</span>
-                </div>
-              </div>
+          {/* Trust Badges */}
+          <div className="pt-4 flex flex-wrap items-center justify-center gap-6 text-xs text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span>GST & e-Way Compliant</span>
             </div>
-
-            {/* Right Column: Hero Graphic Card */}
-            <div className="lg:col-span-5">
-              <div className="bg-slate-800/90 rounded-2xl border border-slate-700/80 p-6 shadow-2xl backdrop-blur-sm space-y-4 animate-float hover:shadow-blue-500/10 transition-all duration-300">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-700">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-beacon"></span>
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                      Live Freight Dispatch Monitor
-                    </span>
-                  </div>
-                  <span className="text-[10px] bg-blue-900/60 text-blue-300 px-2 py-0.5 rounded font-mono font-bold">
-                    NH 48 CORRIDOR
-                  </span>
-                </div>
-
-                {/* Simulated Shipment Card */}
-                <div className="bg-slate-900/80 rounded-xl p-4 border border-slate-700/60 space-y-3">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h4 className="text-sm font-bold text-white">Mild Steel Billets 28MT</h4>
-                      <p className="text-xs text-slate-400">Tata Steel Plant • Jamshedpur</p>
-                    </div>
-                    <span className="text-xs font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800 px-2 py-0.5 rounded">
-                      ₹78,500
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs text-slate-300 py-1 border-y border-slate-800">
-                    <div>
-                      <span className="text-[10px] text-slate-500 block">ORIGIN</span>
-                      <strong className="text-white">Jamshedpur, JH</strong>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-slate-500" />
-                    <div className="text-right">
-                      <span className="text-[10px] text-slate-500 block">DESTINATION</span>
-                      <strong className="text-white">Pune Hub, MH</strong>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
-                    <span>Transporter: <strong className="text-slate-200">VRL Logistics</strong></span>
-                    <span>Status: <strong className="text-blue-400">On Road (12-Wheeler)</strong></span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="p-3 bg-slate-900/50 rounded-xl border border-slate-700/50">
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Driver Badge</span>
-                    <span className="text-emerald-400 font-bold flex items-center gap-1 mt-0.5">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Approved & Live
-                    </span>
-                  </div>
-                  <div className="p-3 bg-slate-900/50 rounded-xl border border-slate-700/50">
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Contact Privacy</span>
-                    <span className="text-blue-400 font-bold flex items-center gap-1 mt-0.5">
-                      <ShieldCheck className="w-3.5 h-3.5" /> Mutual Secured
-                    </span>
-                  </div>
-                </div>
-              </div>
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span>Verified VAHAN Registrations</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span>All-India Corridor Permits</span>
             </div>
           </div>
         </div>
