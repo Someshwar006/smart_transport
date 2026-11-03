@@ -4,6 +4,8 @@ require('dotenv').config(); // fallback to current working directory
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const path = require('path');
+
 
 // Route imports
 const authRoutes = require('./routes/authRoutes');
@@ -26,6 +28,8 @@ app.use(
 );
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.use(express.static(path.join(__dirname, '../client/dist')));
 
 // Request logging (clean format)
 app.use((req, res, next) => {
@@ -62,6 +66,16 @@ app.use((err, req, res, next) => {
     message: err.message || 'Internal Server Error',
     stack: process.env.NODE_ENV === 'production' ? null : err.stack,
   });
+});
+
+
+
+// Serve Vite build assets from the client/dist folder
+
+
+// Handle client-side routing
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
 });
 
 app.listen(PORT, () => {
