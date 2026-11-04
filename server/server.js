@@ -4,7 +4,6 @@ require('dotenv').config(); // fallback to current working directory
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/db');
-const path = require('path');
 
 
 // Route imports
