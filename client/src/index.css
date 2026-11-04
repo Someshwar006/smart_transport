@@ -7,7 +7,7 @@
     scroll-behavior: smooth;
   }
   body {
-    @apply bg-brand-bg text-slate-800 font-sans antialiased;
+    @apply bg-[#F8FAFC] text-slate-800 font-sans antialiased;
     -webkit-tap-highlight-color: transparent;
   }
 }

@@ -1,7 +1,23 @@
 import axios from 'axios';
 
+// Dynamically resolve the API base URL:
+// 1. If VITE_API_URL environment variable is set (e.g., in Render dashboard or .env):
+//    Ensure it properly points to the /api endpoint (appending /api if missing).
+// 2. In browser environments (e.g. deployed on Render at https://smart-transport-f0xg.onrender.com):
+//    Default to relative '/api' so it hits the exact same origin over secure HTTPS without mixed-content issues.
+// 3. In local development:
+//    Defaults to '/api' which is proxied by Vite dev server to http://localhost:5000/api.
+const getBaseApiUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+    const trimmed = envUrl.trim().replace(/\/+$/, '');
+    return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+  }
+  return '/api';
+};
+
 const axiosClient = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  baseURL: getBaseApiUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
